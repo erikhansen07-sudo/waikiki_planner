@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "homepage": "https://erikhansen07-sudo.github.io/Hawaii/",
+  "homepage": "https://erikhansen07-sudo.github.io/waikiki_planner/",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

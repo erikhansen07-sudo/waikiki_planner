@@ -5,5 +5,5 @@ import react from '@vitejs/plugin-react'
 // If you rename the repo, update `base` to match `/<repo-name>/`.
 export default defineConfig({
   plugins: [react()],
-  base: '/Hawaii/',
+  base: '/waikiki_planner/',
 })
