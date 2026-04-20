@@ -1,6 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 import { buildSeedState, TAGS } from './seedData'
+import Gate, { hasAuth, clearAuth } from './Gate'
+import { cloudEnabled, cloudLoad, cloudSave } from './cloud'
+import { CONFIG } from './config'
 
 const STORAGE_KEY = 'waikiki-trip-planner:v2'
 
@@ -137,12 +140,146 @@ const StopForm = ({ initial, onSave, onCancel, title }) => {
   )
 }
 
-export default function App() {
+// ---------- sync status pill ----------
+const SyncPill = ({ status, lastSynced }) => {
+  if (!cloudEnabled()) {
+    return (
+      <span className="sync-pill sync-local" title="No cloud configured — this browser only">
+        <span className="sync-dot" /> Local only
+      </span>
+    )
+  }
+  const labels = {
+    loading: 'Connecting…',
+    syncing: 'Syncing…',
+    synced:  lastSynced ? `Synced · ${timeAgo(lastSynced)}` : 'Synced',
+    error:   'Offline — retry?',
+  }
+  return (
+    <span className={`sync-pill sync-${status}`} title={new Date(lastSynced || Date.now()).toLocaleString()}>
+      <span className="sync-dot" /> {labels[status] || status}
+    </span>
+  )
+}
+
+const timeAgo = (t) => {
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000))
+  if (s < 5) return 'just now'
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  return `${h}h ago`
+}
+
+// ---------- Planner (the real app) ----------
+function Planner() {
   const [state, setState] = useState(loadState)
   const [editing, setEditing] = useState(null) // { mode: 'new'|'edit', dayId|'ideas', stopId? }
   const [filter, setFilter] = useState('All')
+  const [syncStatus, setSyncStatus] = useState(cloudEnabled() ? 'loading' : 'local')
+  const [lastSynced, setLastSynced] = useState(null)
 
+  // Refs for cloud sync choreography
+  const didInitialLoadRef = useRef(false)
+  const skipNextSaveRef = useRef(false)
+  const saveTimerRef = useRef(null)
+
+  // Always persist to localStorage, every state change
   useEffect(() => { saveState(state) }, [state])
+
+  // Initial cloud load — once on mount. If cloud has data, it wins over the
+  // local seed/snapshot. If cloud is empty, we push our local state up.
+  useEffect(() => {
+    if (!cloudEnabled()) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const remote = await cloudLoad()
+        if (cancelled) return
+        if (remote && remote.days && remote.stops) {
+          skipNextSaveRef.current = true
+          setState(remote)
+        } else {
+          // Bin is empty — seed it with whatever we have locally.
+          try { await cloudSave(state) } catch {}
+        }
+        setSyncStatus('synced')
+        setLastSynced(Date.now())
+      } catch {
+        if (!cancelled) setSyncStatus('error')
+      } finally {
+        didInitialLoadRef.current = true
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Debounced cloud save after local edits. Skipped for the state set that
+  // comes from the initial load or from a poll fetch (see skipNextSaveRef).
+  useEffect(() => {
+    if (!cloudEnabled()) return
+    if (!didInitialLoadRef.current) return
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false
+      return
+    }
+    setSyncStatus('syncing')
+    clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        await cloudSave(state)
+        setSyncStatus('synced')
+        setLastSynced(Date.now())
+      } catch {
+        setSyncStatus('error')
+      }
+    }, 800)
+    return () => clearTimeout(saveTimerRef.current)
+  }, [state])
+
+  // Poll every 20s so the other browser picks up changes. Pauses while a
+  // modal is open so we don't yank the form out from under you.
+  useEffect(() => {
+    if (!cloudEnabled()) return
+    const tick = async () => {
+      if (!didInitialLoadRef.current) return
+      if (editing) return
+      try {
+        const remote = await cloudLoad()
+        if (!remote) return
+        // Cheap deep-compare via stringify. State is small.
+        if (JSON.stringify(remote) !== JSON.stringify(state)) {
+          skipNextSaveRef.current = true
+          setState(remote)
+          setLastSynced(Date.now())
+          setSyncStatus('synced')
+        }
+      } catch {
+        setSyncStatus('error')
+      }
+    }
+    const id = setInterval(tick, 20000)
+    return () => clearInterval(id)
+  }, [state, editing])
+
+  // Manual refresh (click the sync pill to force a pull)
+  const manualRefresh = async () => {
+    if (!cloudEnabled()) return
+    setSyncStatus('syncing')
+    try {
+      const remote = await cloudLoad()
+      if (remote && remote.days) {
+        skipNextSaveRef.current = true
+        setState(remote)
+      }
+      setSyncStatus('synced')
+      setLastSynced(Date.now())
+    } catch {
+      setSyncStatus('error')
+    }
+  }
 
   const tripStats = useMemo(() => {
     const all = Object.values(state.stops)
@@ -244,10 +381,15 @@ export default function App() {
   }
 
   const resetAll = () => {
-    if (confirm('Reset the whole itinerary to the original plan? Your edits will be lost.')) {
+    if (confirm('Reset the whole itinerary to the original plan? Your edits will be lost (for everyone — this also pushes the reset to the cloud).')) {
       const fresh = buildSeedState()
       setState(fresh)
     }
+  }
+
+  const signOut = () => {
+    clearAuth()
+    location.reload()
   }
 
   const editingStop = editing?.mode === 'edit' ? state.stops[editing.stopId] : null
@@ -285,7 +427,18 @@ export default function App() {
           ))}
         </div>
         <div className="toolbar-actions">
+          <button
+            className="sync-pill-btn"
+            onClick={manualRefresh}
+            disabled={!cloudEnabled()}
+            title={cloudEnabled() ? 'Click to force a refresh from the cloud' : 'Cloud sync not configured'}
+          >
+            <SyncPill status={syncStatus} lastSynced={lastSynced} />
+          </button>
           <button className="btn btn-ghost" onClick={resetAll}>Reset to original plan</button>
+          {CONFIG.SHARED_PASSWORD && (
+            <button className="btn btn-ghost" onClick={signOut}>Sign out</button>
+          )}
         </div>
       </div>
 
@@ -420,7 +573,11 @@ export default function App() {
       </DragDropContext>
 
       <footer className="footer">
-        <span>Saved locally in this browser · </span>
+        <span>
+          {cloudEnabled()
+            ? 'Saved to the cloud · both of you see the same plan · '
+            : 'Saved locally in this browser · '}
+        </span>
         <span className="footer-soft">aloha, and safe travels.</span>
       </footer>
 
@@ -434,4 +591,11 @@ export default function App() {
       )}
     </div>
   )
+}
+
+// ---------- App (gate wrapper) ----------
+export default function App() {
+  const [unlocked, setUnlocked] = useState(hasAuth)
+  if (!unlocked) return <Gate onUnlock={() => setUnlocked(true)} />
+  return <Planner />
 }
