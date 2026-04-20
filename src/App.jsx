@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 import { buildSeedState, TAGS } from './seedData'
 
-const STORAGE_KEY = 'waikiki-trip-planner:v1'
+const STORAGE_KEY = 'waikiki-trip-planner:v2'
 
 // ---------- storage ----------
 const loadState = () => {
