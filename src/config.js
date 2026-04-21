@@ -26,12 +26,12 @@
 
 export const CONFIG = {
   // From step 2 above — paste the Bin ID.
-  JSONBIN_ID: '',
+  JSONBIN_ID: '69e6b6c2aaba8821971ddde4',
 
   // From step 3 above — paste the access key (starts with $2a$ or $2b$).
-  JSONBIN_ACCESS_KEY: '',
+  JSONBIN_ACCESS_KEY: '$2a$10$K3Qn/gq.D3ZlEOTiFUKw9eafaQY/qtQB9dUoq44UUxp8M1RK7.hnW',
 
   // From step 4 — whatever password you and your wife agreed on.
   // Keep it short and memorable. Both of you type this once per browser.
-  SHARED_PASSWORD: '',
+  SHARED_PASSWORD: 'hawaii2026',
 }
